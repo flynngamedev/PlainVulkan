@@ -1,0 +1,111 @@
+// syntax_showcase -- exercises every construct in the PlainVulkan
+// language reference in one file. Doesn't open a window; run it through
+// `pv check` or `pvc ast` to see the parser handle all of it, or `pv run`
+// to see it actually execute (it just logs, then exits).
+//
+//   pv check examples/syntax_showcase/main.pv
+//   pv run   examples/syntax_showcase/main.pv     (prints a log line, then exits)
+
+/* ---- variables & literals ---- */
+var mutableCounter = 0;
+let renamedOnceIsFine = "still just a plain variable";
+const PI = 3.14159;
+const GREETING = 'single-quoted strings work too';
+var declaredWithoutInit;
+
+var decimalInt = 42;
+var negativeInt = -17;
+var hexInt = 0xFF;
+var binaryInt = 0b1010;
+var floatVal = 3.14;
+var sciFloat = 1.5e3;
+var negSciFloat = 1.5e-3;
+var truthy = true;
+var falsy = false;
+var nothing = null;
+
+/* ---- arrays ---- */
+var empty = [];
+var numbers = [1, 2, 3, 4, 5];
+var trailingComma = [1, 2, 3,];
+var nested = [[1, 2], [3, 4]];
+var firstNumber = numbers[0];
+numbers[0] = 99;
+
+/* ---- assignment operators ---- */
+mutableCounter = 1;
+mutableCounter += 10;
+mutableCounter -= 2;
+mutableCounter *= 3;
+mutableCounter /= 2;
+mutableCounter %= 5;
+
+/* ---- arithmetic, comparison, logical, unary, ternary ---- */
+var arithmetic = (1 + 2 - 3) * 4 / 2 % 3;
+var comparisons = 1 < 2 && 2 <= 2 && 3 > 2 && 3 >= 3 && 1 == 1 && 1 != 2;
+var logical = true && false || !false;
+var unaryDemo = -5 + ~5 + (!false ? 1 : 0);
+var ternaryChain = mutableCounter > 5 ? "big" : mutableCounter > 0 ? "small" : "zero";
+
+/* ---- functions, recursion, nested functions ---- */
+function factorial(n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+function makeAdder(base) {
+    function add(x) {
+        return base + x;
+    }
+    return add(10);
+}
+
+/* ---- control flow: if/elif/else, while, for, break/continue ---- */
+function classify(n) {
+    if (n < 0) {
+        return "negative";
+    } elif (n == 0) {
+        return "zero";
+    } elif (n < 10) {
+        return "small";
+    } else {
+        return "large";
+    }
+}
+
+var loopSum = 0;
+var i = 0;
+while (i < 10) {
+    if (i % 2 == 0) {
+        i += 1;
+        continue;
+    }
+    loopSum += i;
+    i += 1;
+}
+
+var forSum = 0;
+for (var j = 0; j < 5; j += 1) {
+    if (j == 3) {
+        break;
+    }
+    forSum += j;
+}
+
+/* ---- member access & scope (::) access ---- */
+var point = [3, 4]; // arrays stand in for simple structs here
+var x = point[0];
+var y = point[1];
+
+// `Pv::Something` is just the generic `Namespace::name` scope operator
+// applied to the built-in engine namespace -- the grammar doesn't treat
+// it specially, which is what this line demonstrates.
+Pv::Log("factorial(5) = " + factorial(5));
+Pv::Log("makeAdder(5) = " + makeAdder(5));
+Pv::Log("classify(-3), classify(0), classify(4), classify(40): " +
+        classify(-3) + ", " + classify(0) + ", " + classify(4) + ", " + classify(40));
+Pv::Log("loopSum = " + loopSum + ", forSum = " + forSum);
+Pv::Log("point = (" + x + ", " + y + ")");
+Pv::Log("ternaryChain = " + ternaryChain);

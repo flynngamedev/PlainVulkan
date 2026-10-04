@@ -1,0 +1,235 @@
+// terrain_ai -- procedural terrain with chunked LOD, a slope-driven splat
+// bake, and wandering AI agents that path around it.
+//
+//   pv run examples/terrain_ai
+//
+// What it demonstrates:
+//   * Pv::GenerateTerrain      -- deterministic fBm heightfield
+//   * Pv::AddTerrainLayer      -- height/slope driven colour layers
+//   * Pv::BakeTerrainTexture   -- those layers baked into one texture
+//   * Pv::BuildTerrainMesh     -- per-chunk LOD meshes
+//   * Pv::DrawTerrain          -- LOD picked per chunk from the camera
+//   * Pv::CreateNavGridFromTerrain -- walkability derived from slope
+//   * Pv::SetAgentTarget / UpdateAgents -- A* + smoothing + steering
+//   * Pv::SetAgentState        -- the agent state machine, driven here
+//
+// The agents run a two-state machine ("wander" / "regroup") written in
+// .pv itself: the engine stores the state name and the time spent in it,
+// the script decides what that means.
+
+const TERRAIN_CELLS = 128;   // 128x128 cells -> 129x129 vertices
+const CELL_SIZE = 1.0;
+const HEIGHT_SCALE = 18.0;
+const SEED = 20260815;
+const AGENT_COUNT = 6;
+const WORLD_SPAN = TERRAIN_CELLS * CELL_SIZE;
+
+function randish(seed, span) {
+    // Deterministic scatter helper -- the engine has no Pv::Random.
+    var v = (seed * 928371) % 1000;
+    if (v < 0) { v = -v; }
+    return (v / 1000.0) * span;
+}
+
+// Walks a point around the perimeter of a square as t goes 0 -> 4.
+// The engine command set has no trigonometry (and .pv has no math
+// builtins), so the camera orbit is a square path rather than a circle --
+// which for showing off per-chunk LOD is arguably better anyway, since it
+// sweeps the camera through a full range of distances.
+function perimeterX(t, span) {
+    var u = t % 4.0;
+    if (u < 0) { u = u + 4.0; }
+    if (u < 1.0) { return u * span; }
+    if (u < 2.0) { return span; }
+    if (u < 3.0) { return span - (u - 2.0) * span; }
+    return 0.0;
+}
+
+function perimeterZ(t, span) {
+    var u = t % 4.0;
+    if (u < 0) { u = u + 4.0; }
+    if (u < 1.0) { return 0.0; }
+    if (u < 2.0) { return (u - 1.0) * span; }
+    if (u < 3.0) { return span; }
+    return span - (u - 3.0) * span;
+}
+
+Pv::Init();
+var opened = Pv::CreateWindow(1280, 720, "Terrain + AI");
+if (!opened) {
+    Pv::LogError("Could not open a window -- is a display connected?");
+    Pv::Shutdown();
+} else {
+
+Pv::SetAmbient(1, 1, 1, 0.30);
+Pv::AddDirectionalLight(-0.4, -1, -0.25, 1, 0.97, 0.9, 0.9);
+
+// ---------------------------------------------------------------------
+// Terrain
+// ---------------------------------------------------------------------
+var terrain = Pv::CreateTerrain(TERRAIN_CELLS + 1, TERRAIN_CELLS + 1, CELL_SIZE);
+Pv::GenerateTerrain(terrain, SEED, 0.5, HEIGHT_SCALE);
+
+// 32-cell chunks, dropping one LOD level every 60 world units.
+Pv::SetTerrainLOD(terrain, 32, 60.0);
+
+// Layers are matched by height band AND slope band. Anything steep reads
+// as rock regardless of altitude, which is what stops cliffs from being
+// carpeted in grass.
+Pv::ClearTerrainLayers(terrain);
+var sand  = Pv::AddTerrainLayer(terrain, 0.76, 0.70, 0.50,  0.0,  3.0,  0.0, 30.0);
+var grass = Pv::AddTerrainLayer(terrain, 0.32, 0.55, 0.24,  2.0, 11.0,  0.0, 32.0);
+var rock  = Pv::AddTerrainLayer(terrain, 0.45, 0.43, 0.42,  0.0, 99.0, 28.0, 90.0);
+var snow  = Pv::AddTerrainLayer(terrain, 0.92, 0.94, 0.97, 13.0, 99.0,  0.0, 45.0);
+Pv::SetTerrainLayerBlend(terrain, sand,  2.0);
+Pv::SetTerrainLayerBlend(terrain, grass, 3.0);
+Pv::SetTerrainLayerBlend(terrain, rock,  8.0);
+Pv::SetTerrainLayerBlend(terrain, snow,  3.0);
+
+var terrainTex = Pv::BakeTerrainTexture(terrain, 512);
+var terrainMat = Pv::CreateMaterial();
+Pv::SetMaterialAlbedo(terrainMat, terrainTex);
+Pv::SetTerrainMaterial(terrain, terrainMat);
+Pv::BuildTerrainMesh(terrain);
+Pv::SetTerrainCollision(terrain, true);
+
+var size = Pv::GetTerrainSize(terrain);
+Pv::Log("terrain " + size.cols + "x" + size.rows + "  height " + size.minHeight + " .. " + size.maxHeight);
+
+var tstats = Pv::GetTerrainStats(terrain);
+Pv::Log("chunks: " + tstats.chunks + "  full-detail triangles: " + tstats.trianglesFullDetail);
+
+// ---------------------------------------------------------------------
+// Navigation
+// ---------------------------------------------------------------------
+// Anything steeper than 30 degrees is impassable; gentler slopes stay
+// passable but cost more, so paths prefer the valleys.
+var nav = Pv::CreateNavGridFromTerrain(terrain, 30.0);
+var nstats = Pv::GetNavGridStats(nav);
+Pv::Log("nav grid " + nstats.cols + "x" + nstats.rows + "  walkable " + nstats.walkableCells + "/" + nstats.cells);
+
+// A couple of hand-placed obstacles on top of the slope-derived grid.
+Pv::AddNavObstacle(nav, WORLD_SPAN * 0.5, WORLD_SPAN * 0.5, 14.0, 14.0);
+Pv::AddNavObstacle(nav, WORLD_SPAN * 0.25, WORLD_SPAN * 0.7, 10.0, 22.0);
+
+// ---------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------
+var agentMesh = Pv::CreateSphere(0.5, 12);
+var agentList = [];
+var agentSeed = [];
+
+for (var i = 0; i < AGENT_COUNT; i += 1) {
+    var sx = randish(i * 13 + 3, WORLD_SPAN);
+    var sz = randish(i * 29 + 7, WORLD_SPAN);
+    // Nudge a spawn that landed on a cliff onto walkable ground.
+    var tries = 0;
+    while (!Pv::IsNavPointWalkable(nav, sx, sz) && tries < 24) {
+        sx = randish(i * 13 + 3 + tries * 5, WORLD_SPAN);
+        sz = randish(i * 29 + 7 + tries * 11, WORLD_SPAN);
+        tries += 1;
+    }
+    var a = Pv::CreateAgent(nav, sx, sz);
+    Pv::SetAgentSpeed(a, 4.0 + i * 0.35);
+    Pv::SetAgentTurnRate(a, 220.0);
+    Pv::SetAgentRadius(a, 0.5);
+    Pv::SetAgentState(a, "wander");
+    Pv::SetAgentBlackboard(a, "trips", 0);
+    agentList[i] = a;
+    agentSeed[i] = i * 91 + 17;
+}
+
+Pv::Log("spawned " + Pv::GetAgentCount() + " agents");
+
+// ---------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------
+var camAngle = 0.0;
+var showHelp = true;
+
+while (Pv::IsWindowOpen()) {
+    Pv::BeginFrame();
+    Pv::Clear(0x0d1420);
+
+    var dt = Pv::GetDeltaTime();
+
+    // --- the state machine, written in the script ---
+    for (var k = 0; k < AGENT_COUNT; k += 1) {
+        var ag = agentList[k];
+        var st = Pv::GetAgentState(ag);
+        var stime = Pv::GetAgentStateTime(ag);
+
+        if (Pv::HasAgentArrived(ag) || stime > 14.0) {
+            var trips = Pv::GetAgentBlackboard(ag, "trips");
+            if (trips == null) { trips = 0; }
+            trips += 1;
+            Pv::SetAgentBlackboard(ag, "trips", trips);
+
+            // Every fourth trip the agent regroups on the middle of the
+            // map instead of picking somewhere new.
+            var gx = 0.0;
+            var gz = 0.0;
+            if (trips % 4 == 0) {
+                Pv::SetAgentState(ag, "regroup");
+                gx = WORLD_SPAN * 0.5 + 12.0;
+                gz = WORLD_SPAN * 0.5 + 12.0;
+            } else {
+                Pv::SetAgentState(ag, "wander");
+                agentSeed[k] = agentSeed[k] + 37;
+                gx = randish(agentSeed[k], WORLD_SPAN);
+                gz = randish(agentSeed[k] * 3 + 5, WORLD_SPAN);
+            }
+
+            var routed = Pv::SetAgentTarget(ag, gx, gz);
+            if (!routed) {
+                // No route (goal on a cliff or inside an obstacle) --
+                // try again next frame with a different destination.
+                agentSeed[k] = agentSeed[k] + 101;
+            }
+        }
+    }
+
+    Pv::UpdateAgents(dt);
+
+    // --- camera walks the perimeter, looking at the middle ---
+    camAngle += dt * 0.06;
+    var margin = WORLD_SPAN * 0.22;
+    var walkSpan = WORLD_SPAN + margin * 2.0;
+    var cx = perimeterX(camAngle, walkSpan) - margin;
+    var cz = perimeterZ(camAngle, walkSpan) - margin;
+    var groundAtCam = Pv::GetTerrainHeight(terrain, cx, cz);
+    Pv::SetCamera(cx, groundAtCam + 46.0, cz);
+    Pv::LookAt(WORLD_SPAN * 0.5, 6.0, WORLD_SPAN * 0.5);
+
+    // --- draw ---
+    Pv::DrawTerrain(terrain, 1.0);
+
+    for (var m = 0; m < AGENT_COUNT; m += 1) {
+        var pos = Pv::GetAgentPosition(agentList[m]);
+        Pv::DrawMesh(agentMesh, pos[0], pos[1] + 0.5, pos[2]);
+    }
+
+    // --- HUD ---
+    var drawn = Pv::GetTerrainStats(terrain);
+    Pv::DrawText("FPS " + Pv::GetFPS(), 20, 20, 0xFFFFFF);
+    Pv::DrawText("chunks drawn " + drawn.chunksDrawnLastFrame + "/" + drawn.chunks, 20, 40, 0xCCDDEE);
+    Pv::DrawText("tris drawn " + drawn.trianglesDrawnLastFrame + " of " + drawn.trianglesFullDetail +
+                 " at full detail", 20, 60, 0xCCDDEE);
+    Pv::DrawText("agent 0: " + Pv::GetAgentState(agentList[0]) +
+                 "  trips " + Pv::GetAgentBlackboard(agentList[0], "trips"), 20, 80, 0xFFDD88);
+
+    if (showHelp) {
+        Pv::DrawText("H toggles this help  |  ESC quits", 20, 690, 0xAAAAAA);
+        Pv::DrawText("terrain LOD steps down every 60 units from the camera", 20, 670, 0xAAAAAA);
+    }
+
+    if (Pv::IsKeyPressed(72)) { showHelp = !showHelp; }  // H
+    if (Pv::IsKeyPressed(256)) { Pv::CloseWindow(); }    // Escape
+
+    Pv::EndFrame();
+}
+
+Pv::DestroyNavGrid(nav);
+Pv::DestroyTerrain(terrain);
+Pv::Shutdown();
+}

@@ -1,0 +1,7 @@
+{
+  "name": "mini_game",
+  "version": "0.1.0",
+  "entry": "main.pv",
+  "window": { "width": 1024, "height": 768, "title": "Cube Collector" },
+  "build": { "vulkan_validation": true }
+}

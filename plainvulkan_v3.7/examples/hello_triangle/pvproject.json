@@ -1,0 +1,7 @@
+{
+  "name": "hello_triangle",
+  "version": "0.1.0",
+  "entry": "main.pv",
+  "window": { "width": 800, "height": 600, "title": "Hello Triangle" },
+  "build": { "vulkan_validation": true }
+}

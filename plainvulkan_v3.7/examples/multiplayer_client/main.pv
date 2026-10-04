@@ -1,0 +1,134 @@
+// main.pv -- a multiplayer client that connects to a PlainS server.
+//
+// Pair this with PlainS's examples/mp_server. Start the server first:
+//     python3 pls.py run examples/mp_server
+// then:
+//     python3 pv.py run examples/multiplayer_client
+//
+// --- how this splits work with the server --------------------------------
+// This client sends INPUT (a direction, a shot) and renders whatever the
+// server says the world looks like. It never tells the server where it is.
+// That is the whole point of an authoritative server: a client that could
+// report its own position could report any position at all.
+//
+// --- two things worth noticing -------------------------------------------
+// 1. Callbacks are passed by name (`Pv::OnReceive(OnServerMessage)`). They
+//    must be TOP-LEVEL functions -- a function nested inside a block
+//    compiles to a capturing lambda, which has no function-pointer form and
+//    will be rejected by the C++ compiler.
+//
+// 2. `.pv` has no object-literal syntax, so input packets are built with
+//    Pv::SerializeInput(action, x, y, z) rather than a `{...}` literal.
+//    (PlainS's `.pls` language does have literals -- see the note at the
+//    top of PlainS/transpiler/src/pls.lalrpop for why the two differ.)
+
+var connected = false;
+var local_player = null;
+
+function Main() {
+    Pv::Init();
+    Pv::CreateWindow(1280, 720, "PlainVulkan Multiplayer");
+    Pv::NewScene("Multiplayer");
+
+    // A local entity for the camera to follow. Remote players are created
+    // automatically by Pv::DeserializeState as `Net_<serverId>` entities the
+    // first time the server mentions them -- no spawn handling needed here.
+    local_player = Pv::CreateEntity("LocalPlayer");
+    Pv::SetEntityMesh(local_player, Pv::CreateCube(1.0));
+
+    Pv::SetCamera(0, 5, -10);
+    Pv::LookAt(0, 0, 0);
+
+    // Connect first, then register handlers. The runtime holds the connect
+    // event until a handler exists, so this order works (it is the order the
+    // API reference uses).
+    Pv::Connect("127.0.0.1", 8080);
+    Pv::OnConnect(OnServerConnect);
+    Pv::OnReceive(OnServerMessage);
+    Pv::OnDisconnect(OnServerDisconnect);
+    Pv::OnNetworkError(OnNetworkError);
+
+    while (Pv::IsWindowOpen()) {
+        // BeginFrame dispatches any callbacks the network thread queued
+        // since the last frame, so handlers always run at one predictable
+        // point rather than mid-render.
+        Pv::BeginFrame();
+        Pv::Clear(0x101020);
+
+        SendInput();
+        Pv::UpdateScene(Pv::GetDeltaTime());
+        Pv::DrawScene();
+        DrawNetworkHud();
+
+        Pv::EndFrame();
+    }
+
+    Pv::Disconnect();
+    Pv::Shutdown();
+}
+
+function OnServerConnect() {
+    connected = true;
+    Pv::Log("connected to server");
+}
+
+function OnServerDisconnect(reason) {
+    connected = false;
+    Pv::LogWarning("disconnected: " + reason);
+}
+
+function OnNetworkError(error) {
+    Pv::LogError("network error: " + error);
+}
+
+function OnServerMessage(data) {
+    var kind = data["type"];
+
+    if (kind == "state") {
+        // Applies every entity in the packet to the local scene, creating
+        // mirrors for ones we haven't seen before.
+        Pv::DeserializeState(data);
+    }
+    elif (kind == "welcome") {
+        Pv::Log("server assigned us player id " + data["player_id"]);
+        var start = data["initial_position"];
+        Pv::SetEntityPosition(local_player, start[0], start[1], start[2]);
+    }
+    elif (kind == "player_killed") {
+        Pv::Log("player " + data["victim"] + " was killed by " + data["killer"]);
+    }
+}
+
+function SendInput() {
+    if (!connected) { return; }
+
+    // A DIRECTION, not a position. The server integrates it.
+    var dx = 0.0;
+    var dz = 0.0;
+    if (Pv::IsKeyDown(68)) { dx = 1.0; }   // D
+    if (Pv::IsKeyDown(65)) { dx = -1.0; }  // A
+    if (Pv::IsKeyDown(87)) { dz = 1.0; }   // W
+    if (Pv::IsKeyDown(83)) { dz = -1.0; }  // S
+
+    if (Pv::IsMousePressed(0)) {
+        // Aim straight ahead from the camera for this example.
+        Pv::Send(Pv::SerializeInput("shoot", 0.0, 0.0, 1.0));
+    }
+    elif (Pv::IsKeyPressed(32)) {
+        Pv::Send(Pv::SerializeInput("jump", 0.0, 1.0, 0.0));
+    }
+    elif (dx != 0.0 || dz != 0.0) {
+        Pv::Send(Pv::SerializeInput("move", dx, 0.0, dz));
+    }
+}
+
+function DrawNetworkHud() {
+    Pv::BeginUI();
+    var stats = Pv::GetNetworkStats();
+    Pv::UIText("status: " + stats["status"], 10, 10, 16, 0xFFFFFF);
+    Pv::UIText("ping: " + stats["latency"] + " ms", 10, 30, 16, 0xFFFFFF);
+    Pv::UIText("down: " + stats["bytesReceived"] + " B", 10, 50, 16, 0xFFFFFF);
+    Pv::EndUI();
+}
+
+Main();

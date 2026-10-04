@@ -1,0 +1,7 @@
+{
+  "name": "terrain_ai",
+  "version": "0.1.0",
+  "entry": "main.pv",
+  "window": { "width": 1280, "height": 720, "title": "Terrain + AI" },
+  "build": { "vulkan_validation": true }
+}

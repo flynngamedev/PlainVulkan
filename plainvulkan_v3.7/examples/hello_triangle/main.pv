@@ -1,0 +1,20 @@
+// The smallest useful PlainVulkan program: open a window and draw one
+// triangle every frame until the window is closed.
+//
+//   pv run examples/hello_triangle
+
+Pv::Init();
+var opened = Pv::CreateWindow(800, 600, "Hello Triangle");
+
+if (!opened) {
+    Pv::LogError("Could not open a window -- is a display connected?");
+} else {
+    while (Pv::IsWindowOpen()) {
+        Pv::BeginFrame();
+        Pv::Clear(0x101018);
+        Pv::DrawTriangle(400, 300, 0xFFCC33);
+        Pv::EndFrame();
+    }
+}
+
+Pv::Shutdown();

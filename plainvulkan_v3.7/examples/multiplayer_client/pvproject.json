@@ -1,0 +1,7 @@
+{
+  "name": "multiplayer_client",
+  "version": "0.1.0",
+  "entry": "main.pv",
+  "window": { "width": 1280, "height": 720, "title": "PlainVulkan Multiplayer" },
+  "build": { "vulkan_validation": true }
+}

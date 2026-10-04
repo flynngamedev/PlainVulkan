@@ -1,0 +1,18 @@
+[package]
+name = "pv-compiler"
+version = "3.7.0"
+edition = "2021"
+description = "AST -> C++/Vulkan code generator and native build orchestrator for PlainVulkan"
+
+[[bin]]
+name = "pvcc"
+path = "src/bin/pvcc.rs"
+
+[dependencies]
+pv-transpiler = { path = "../transpiler" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# std::fs::canonicalize returns \\?\-prefixed verbatim paths on Windows,
+# which break once written into a CMakeLists.txt path (see pvcc.rs).
+# dunce::canonicalize strips the prefix when it isn't needed.
+dunce = "1"

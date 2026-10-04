@@ -1,0 +1,7 @@
+{
+  "name": "syntax_showcase",
+  "version": "0.1.0",
+  "entry": "main.pv",
+  "window": { "width": 800, "height": 600, "title": "Syntax Showcase" },
+  "build": { "vulkan_validation": true }
+}

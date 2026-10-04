@@ -1,0 +1,173 @@
+// physics_playground -- exercises the four systems added alongside the
+// original engine: PhysX physics, the scene graph, particle emitters, and
+// keyframe animation built from script.
+//
+// Controls:
+//   Space   drop a new box
+//   R       reset the stack
+//   Escape  quit
+
+Pv::Init();
+Pv::CreateWindow(1280, 720, "Physics Playground");
+Pv::InitPhysics();
+Pv::SetGravity(0, -9.8, 0);
+// 60Hz fixed step with up to 4 substeps: the simulation stays identical
+// whether the frame rate is 30 or 144.
+Pv::SetPhysicsTimestep(60, 4);
+
+Pv::Log("physics backend: " + Pv::GetPhysicsBackend());
+
+// ---- scene ------------------------------------------------------------
+Pv::NewScene("playground");
+
+var ground = Pv::CreateEntity("Ground");
+Pv::SetEntityPosition(ground, 0, -0.5, 0);
+Pv::SetEntityMesh(ground, Pv::CreatePlane(30, 30));
+Pv::AddEntityBody(ground, "box", 0, 30, 1, 30);   // mass 0 = static
+
+var sun = Pv::CreateEntity("Sun");
+Pv::AddEntityLight(sun, "directional", 1, 0.96, 0.9, 1.1);
+Pv::SetEntityRotation(sun, -0.9, 0.6, 0);
+
+Pv::SetAmbient(0.4, 0.45, 0.55, 0.35);
+
+// A tower of boxes. On the PhysX backend this settles into a stable stack;
+// the old solver would have jittered it apart.
+var boxMesh = Pv::CreateCube(1.0);
+
+function spawnBox(x, y, z, mass) {
+    var e = Pv::CreateEntity("Box");
+    Pv::SetEntityPosition(e, x, y, z);
+    Pv::SetEntityMesh(e, boxMesh);
+    Pv::AddEntityBody(e, "box", mass, 1, 1, 1);
+    return e;
+}
+
+function buildStack() {
+    var i = 0;
+    while (i < 6) {
+        spawnBox(0, i + 0.5, 0, 1.0);
+        i += 1;
+    }
+}
+buildStack();
+
+// A capsule -- a real capsule shape under PhysX, not a sphere in disguise.
+var capsule = Pv::CreateEntity("Capsule");
+Pv::SetEntityPosition(capsule, 3, 4, 0);
+Pv::SetEntityMesh(capsule, Pv::CreateCylinder(0.5, 2.0));
+Pv::AddEntityBody(capsule, "capsule", 2.0, 1.0, 2.0, 1.0);
+
+// ---- a kinematic platform driven by a script-built animation ----------
+// Nothing is loaded from disk: the clip is authored here with AddAnimationKey.
+var platformAnim = Pv::CreateAnimation();
+Pv::AddAnimationClip(platformAnim, "sweep");
+Pv::AddAnimationKey(platformAnim, "sweep", "position", 0.0, -6, 1, 0);
+Pv::AddAnimationKey(platformAnim, "sweep", "position", 2.0, 6, 1, 0);
+Pv::AddAnimationKey(platformAnim, "sweep", "position", 4.0, -6, 1, 0);
+Pv::PlayAnimation(platformAnim, "sweep");
+Pv::SetAnimationLoop(platformAnim, true);
+
+var platform = Pv::CreateEntity("Platform");
+Pv::SetEntityMesh(platform, Pv::CreateCube(1.0));
+Pv::SetEntityScale(platform, 4, 0.4, 4);
+Pv::AddEntityBody(platform, "box", 0, 4, 0.4, 4);
+var platformBody = Pv::GetEntityBody(platform);
+// Kinematic, so it pushes whatever is standing on it instead of ignoring it.
+Pv::SetBodyKinematic(platformBody, true);
+
+// ---- particles --------------------------------------------------------
+var sparks = Pv::CreateEntity("Sparks");
+var emitter = Pv::AddEntityEmitter(sparks);
+Pv::SetEntityPosition(sparks, 0, 0.2, 0);
+Pv::SetEmitterShape(emitter, "hemisphere", 0.3, 0);
+Pv::SetEmitterRate(emitter, 0);          // burst-only; fired on impact
+Pv::SetEmitterLifetime(emitter, 0.3, 0.8);
+Pv::SetEmitterSpeed(emitter, 3, 7);
+Pv::SetEmitterSize(emitter, 0.04, 0.10);
+Pv::SetEmitterColor(emitter, 0xFFD060FF, 0xFF300000);
+Pv::SetEmitterBlend(emitter, "additive");
+Pv::SetEmitterGravity(emitter, 0, -12, 0);
+Pv::SetEmitterDrag(emitter, 1.2);
+Pv::SetEmitterMaxParticles(emitter, 2000);
+
+var smoke = Pv::CreateEntity("Smoke");
+var smokeEmitter = Pv::AddEntityEmitter(smoke);
+Pv::SetEntityPosition(smoke, -8, 0.5, -4);
+Pv::SetEmitterShape(smokeEmitter, "cone", 0.4, 18);
+Pv::SetEmitterRate(smokeEmitter, 30);
+Pv::SetEmitterLifetime(smokeEmitter, 2.0, 3.5);
+Pv::SetEmitterSpeed(smokeEmitter, 0.8, 1.6);
+Pv::SetEmitterSize(smokeEmitter, 0.5, 1.4);
+Pv::SetEmitterColor(smokeEmitter, 0x99999966, 0x44444400);
+Pv::SetEmitterDrag(smokeEmitter, 0.4);
+
+Pv::StartScene();
+
+// ---- main loop --------------------------------------------------------
+var time = 0.0;
+var spawned = 0;
+
+while (Pv::IsWindowOpen()) {
+    Pv::BeginFrame();
+    Pv::Clear(0x141821);
+
+    var dt = Pv::GetDeltaTime();
+    time += dt;
+
+    Pv::SetCamera(12, 8, 14);
+    Pv::LookAt(0, 2, 0);
+
+    // Drive the kinematic platform from the animation curve.
+    Pv::UpdateAnimations(dt);
+    var t = Pv::GetAnimationTransform(platformAnim);
+    if (t.valid) {
+        Pv::SetEntityPosition(platform, t.x, t.y, t.z);
+    }
+
+    // Physics, animators, and emitters all advance inside UpdateScene.
+    Pv::UpdateScene(dt);
+
+    // Spark burst wherever something hits hard enough. GetContacts is new
+    // with the PhysX backend -- the old solver reported nothing.
+    var contacts = Pv::GetContacts();
+    var i = 0;
+    while (i < 8) {
+        var c = contacts[i];
+        if (c != null) {
+            if (c.impulse > 1.5) {
+                Pv::SetEmitterPosition(emitter, c.x, c.y, c.z);
+                Pv::BurstParticles(emitter, 24);
+            }
+        }
+        i += 1;
+    }
+
+    if (Pv::IsKeyPressed(32)) {          // Space
+        spawnBox(Pv::GetMouseX() * 0.01 - 3, 10, 0, 1.0);
+        spawned += 1;
+        Pv::StartScene();                 // instantiate the new body
+    }
+
+    if (Pv::IsKeyPressed(82)) {          // R
+        Pv::StopScene();
+        Pv::StartScene();
+    }
+
+    Pv::DrawScene();
+
+    Pv::DrawText("PHYSICS PLAYGROUND", 20, 20, 0xFFFFFF);
+    Pv::DrawText("BACKEND " + Pv::GetPhysicsBackend(), 20, 40, 0x88DDFF);
+    Pv::DrawText("FPS " + Pv::GetFPS(), 20, 60, 0xAAAAAA);
+    Pv::DrawText("PARTICLES " + Pv::GetParticleCount(smokeEmitter), 20, 80, 0xAAAAAA);
+    Pv::DrawText("SPACE DROP   R RESET   ESC QUIT", 20, 680, 0x888888);
+
+    if (Pv::IsKeyPressed(256)) {         // Escape
+        Pv::CloseWindow();
+    }
+
+    Pv::EndFrame();
+}
+
+Pv::StopScene();
+Pv::Shutdown();

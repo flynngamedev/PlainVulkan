@@ -1,0 +1,7 @@
+{
+  "name": "physics_playground",
+  "version": "0.1.0",
+  "entry": "main.pv",
+  "window": { "width": 1280, "height": 720, "title": "Physics Playground" },
+  "build": { "vulkan_validation": true }
+}
