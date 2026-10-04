@@ -1,0 +1,31 @@
+name: Unzip 7z Archive
+on:
+  workflow_dispatch: # Allows you to run this manually on mobile
+
+# THIS IS THE FIX: Explicitly grants the workflow bot permission to push code
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install 7-Zip
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Extract archive
+        run: 7z x plainvulkan_v3.7.7z -o.
+
+      - name: Delete original 7z file
+        run: rm plainvulkan_v3.7.7z
+
+      - name: Commit and push files back to repo
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Extracted plainvulkan source files with correct permissions"
+          git push
