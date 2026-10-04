@@ -1,31 +1,31 @@
-name: Unzip 7z Archive
+name: Move Files to Root
 on:
   workflow_dispatch: # Allows you to run this manually on mobile
 
-# THIS IS THE FIX: Explicitly grants the workflow bot permission to push code
 permissions:
   contents: write
 
 jobs:
-  extract:
+  move-files:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install 7-Zip
-        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+      - name: Move files out of subfolder
+        run: |
+          # Move all hidden and non-hidden files from the folder to the root
+          mv plainvulkan_v3.7/* . 2>/dev/null || true
+          mv plainvulkan_v3.7/.* . 2>/dev/null || true
+          
+          # Delete the now empty folder
+          rm -rf plainvulkan_v3.7
 
-      - name: Extract archive
-        run: 7z x plainvulkan_v3.7.7z -o.
-
-      - name: Delete original 7z file
-        run: rm plainvulkan_v3.7.7z
-
-      - name: Commit and push files back to repo
+      - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.email "41898282+github-actions[bot]@://github.com"
           git add .
-          git commit -m "Extracted plainvulkan source files with correct permissions"
+          git commit -m "Move all project files directly to the root folder"
           git push
+
